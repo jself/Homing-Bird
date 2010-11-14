@@ -31,10 +31,9 @@ class ZmqThread(object):
         else:
             send_socket.send_json((0, msg))
 
-    def __init__(self, f, supervisor=None, daemon=True, bind=None, **kwargs):
+    def __init__(self, f, supervisor=None, daemon=True, bind=None, server=True, **kwargs):
         """
         f should be a callable function that gets called when this class gets sent a message. 
-        If extending this class, overriding the "called" method is acceptable as well.
         **kwargs are any default default arguments sent to the callable.
 
         The callable should be of form f(message, self.defaults). Message may be 
@@ -50,7 +49,10 @@ class ZmqThread(object):
         self.daemon = daemon
         self.bind = bind or 'inproc://zmqthread-%s'%str(hash(self))
         self.binds[self.bind] = self
-        self.recv_socket.bind(self.bind)
+        if server:
+            self.recv_socket.bind(self.bind)
+        else:
+            self.recv_socket.connect(self.bind)
         self.start()
 
     def start(self):
