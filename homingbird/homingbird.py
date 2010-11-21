@@ -1,83 +1,125 @@
 import zmq
 import threading
 import traceback
+import time
 
-class Message(object):
-    """
-    Used for control messages.
-    """
+class BaseMessage(object):
+    name = "BaseMessage"
+    def __init__(self, message=None, sender=None, data=None, receiver=None):
+        message = message if message is not None else {}
+
+        self.sender = message.get('sender', sender)
+        self.data = message.get('data', data)
+
+        if not self.sender:
+            raise Exception('Invalid sender')
+        if not self.data:
+            raise Exception('Message missing data')
+
+        self.receiver = receiver
+
+    def reply(self, data):
+        if not self.receiver:
+            raise Exception('This message was not received')
+        self.receiver.send(self.sender, data)
+
+    def get(self, key, *args, **kwargs):
+        return getattr(self, key, *args, **kwargs)
+
+class Message(BaseMessage):
     name = 'Message'
-    def __init__(self, data=None):
-        self.data = data
 
-class ExitMessage(Message):
+
+class ExitMessage(BaseMessage):
     name = 'Exit'
 
-class ExceptionMessage(Message):
+class ExceptionMessage(BaseMessage):
     name = 'Exception'
-    def __init__(self, traceback):
-        self.traceback = traceback
 
-class ZmqThread(object):
-    context = zmq.Context()
-    binds = {}
+class Node(object):
+    _context = None
+    _message_types = {'Message':Message, 'Exit':ExitMessage, 'Exception':ExceptionMessage}
+    def __init__(self, f, bind=None, daemon=True, spawn=True):
+        #spawn allows for local nodes to be created in the current thread
+        #f is a callable that will get sent message info
+        Node._context = Node._context or zmq.Context()
 
-    @classmethod
-    def send(cls, bind, msg):
-        send_socket = zmq.Socket(cls.context, zmq.PUSH)
-        send_socket.connect(bind)
-        if isinstance(msg, Message):
-            send_socket.send_json((1, msg.__dict__))
-        else:
-            send_socket.send_json((0, msg))
-
-    def __init__(self, f, supervisor=None, daemon=True, bind=None, server=True, **kwargs):
-        """
-        f should be a callable function that gets called when this class gets sent a message. 
-        **kwargs are any default default arguments sent to the callable.
-
-        The callable should be of form f(message, self.defaults). Message may be 
-        any valid serializable python object. Note that the function's return will be ignored.
-
-        Supervisor is a ZmqThread object that will receive errors and statuses.
-        """
-        #from ipdb import set_trace; set_trace()
         self.f = f
-        self.defaults = kwargs
-        self.recv_socket = zmq.Socket(self.context, zmq.PULL)
-        self.supervisor = supervisor
-        self.daemon = daemon
-        self.bind = bind or 'inproc://zmqthread-%s'%str(hash(self))
-        self.binds[self.bind] = self
-        if server:
-            self.recv_socket.bind(self.bind)
-        else:
-            self.recv_socket.connect(self.bind)
-        self.start()
+        self.id = bind or 'inproc://homingbird-' + str(hash(self))
 
-    def start(self):
-        self.thread = threading.Thread(None, self.main_loop)
-        self.thread.daemon = self.daemon
-        self.thread.start()
+        self.recv_socket = self._context.socket(zmq.PULL)
+        self.recv_socket.bind(self.id)
+        
+        if spawn:
+            t = threading.Thread(None, self.main)
+            t.daemon = daemon
+            t.start()
 
-    def __lshift__(self, msg):
-        ZmqThread.send(self.bind, msg)
+    def send(self, to, data):
+        if isinstance(to, Node):
+            to = to.id
+        m = Message(sender=self.id, data=data)
+        socket = self._context.socket(zmq.PUSH)
+        socket.connect(to)
+        socket.send_pyobj(m)
+        
 
+    def get_message(self):
+        m= self.recv_socket.recv_pyobj()
+        return m
 
-    def main_loop(self):
-        if self.supervisor:
-            self.supervisor << "Started"
-            
+    def decompose(self, message):
+        if not message or not self._message_types.get(message.get('name', None)):
+            raise Exception('Invalid message type or parameters.')
+
+        message_type = self._message_types[message.get('name')]
+        m = message_type(message, receiver=self)
+        return m
+
+    def report(self, m):
+        #if m.name == 'Exit':
+        #    print '%s exiting'%self.bind
+        print m.__dict__
+
+    def receive(self, timeout=None):
+        if timeout:
+            p = zmq.Poller()
+            p.register(self.recv_socket)
+
+            start = time.time()
+            while 1:
+                r = p.poll(100) #poll for 100 ms, see if we're past our threshold
+                if r: break
+                if time.time() - start > timeout:
+                    return None
+        m = self.decompose(self.get_message())
+        return m
+
+    def main(self):
         while 1:
-            control, msg = self.recv_socket.recv_json()
-            if control and msg == 'Exit':
-                if self.supervisor:
-                    self.supervisor << "Exiting"
-                return
+            m = self.receive(1)
+            if not m: continue 
+            if m.name == 'Exit':
+                self.report(m)
+                break
 
-            try:
-                self.f(msg, self.defaults)
-            except Exception, e:
-                if self.supervisor:
-                    self.supervisor <<  ExceptionMessage(traceback.format_exc())
+            elif m.name == 'Message':
+                self.f(m)
+
+if __name__ == '__main__':
+    def ping(m):
+        print "%s received"%m.data
+        m.reply("Ping")
+
+    def pong(m):
+        print "%s received."%m.data
+        m.reply("Pong")
+
+
+    c = zmq.Context()
+    n1 = Node(ping)
+    n2 = Node(pong)
+
+    n1.send(n2, "Ping")
+    time.sleep(4)
 
