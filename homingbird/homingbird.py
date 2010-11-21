@@ -106,6 +106,17 @@ class Node(object):
             elif m.name == 'Message':
                 self.f(m)
 
+class LocalNode(Node):
+    def __init__(self, bind=None, daemon=True):
+        #spawn allows for local nodes to be created in the current thread
+        #f is a callable that will get sent message info
+        Node._context = Node._context or zmq.Context()
+
+        self.id = bind or 'inproc://homingbird-' + str(hash(self))
+
+        self.recv_socket = self._context.socket(zmq.PULL)
+        self.recv_socket.bind(self.id)
+
 if __name__ == '__main__':
     def ping(m):
         print "%s received"%m.data

@@ -6,19 +6,14 @@ queue for python. It uses zeromq as its messaging backend.
 
 USAGE:
 #create a thread that calls a function when a message is received
->>> from homingbird import ZmqThread
->>> def echo(msg, defaults):
-        print msg
+>>> from homingbird import Node, LocalNode
+>>> def echo(msg):
+...     msg.reply(msg.data)
+...
+>>> l = LocalNode()
+>>> r = Node(echo)
+>>> l.send(r, "Hi there")
+>>> print l.receive().data
+Hi there
 
->>> z = ZmqThread(echo)
-#send a message
->>> z << "Message" # (or z.call(z.bind, "Message") for now if you don't like << )
-Message
-
-The ZmqThread takes a few attributes:
-supervisor -> A ZmqThread that this thread reports to, either errors or start/exit status
-daemon -> The python threading daemon attribute. default is true
-bind -> The Zmq binding string. Currently an inproc with zmqthread- and the hash of the dict.
-        You may change this to enable cross-process communication. Just send the correct bind to
-        ZmqThread.call to place the call.
-
+The API is still very much in flux. Still to come: supervisors, JSONNodes, exceptions
