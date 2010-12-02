@@ -49,7 +49,6 @@ class Node(object):
         #f is a callable that will get sent message info. Should be passed unless this is a base class.
         Node._context = Node._context or zmq.Context()
 
-        from ipdb import set_trace; set_trace()
         self.f = f
         self.id = bind or 'inproc://homingbird-' + str(hash(self))
 
