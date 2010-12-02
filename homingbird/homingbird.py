@@ -2,10 +2,15 @@ import zmq
 import threading
 import traceback
 import time
+import uuid
+import copy
+
+def get_random():
+    return str(uuid.uuid4()).replace('-','')
 
 class BaseMessage(object):
     name = "BaseMessage"
-    def __init__(self, message=None, sender=None, data=None, receiver=None):
+    def __init__(self, message=None, sender=None, data=None, receiver=None, message_id=None):
         message = message if message is not None else {}
 
         self.sender = message.get('sender', sender)
@@ -13,10 +18,9 @@ class BaseMessage(object):
 
         if not self.sender:
             raise Exception('Invalid sender')
-        if not self.data:
-            raise Exception('Message missing data')
 
         self.receiver = receiver
+        self.message_id = message_id or get_random()
 
     def reply(self, data):
         if not self.receiver:
@@ -32,38 +36,45 @@ class Message(BaseMessage):
 
 class ExitMessage(BaseMessage):
     name = 'Exit'
+    def __init__(self, sender=None, data=None, receiver=None):
+        super(ExitMessage, self).__init__(sender=sender, data="Exit", receiver=receiver)
 
 class ExceptionMessage(BaseMessage):
     name = 'Exception'
 
 class Node(object):
     _context = None
-    _message_types = {'Message':Message, 'Exit':ExitMessage, 'Exception':ExceptionMessage}
-    def __init__(self, f, bind=None, daemon=True, spawn=True):
-        #spawn allows for local nodes to be created in the current thread
-        #f is a callable that will get sent message info
+    _message_types = {'Message':Message, 'Exit':ExitMessage, 'Exception':ExceptionMessage }
+    def __init__(self, f, bind=None, daemon=True, **kwargs):
+        #f is a callable that will get sent message info. Should be passed unless this is a base class.
         Node._context = Node._context or zmq.Context()
 
+        from ipdb import set_trace; set_trace()
         self.f = f
         self.id = bind or 'inproc://homingbird-' + str(hash(self))
 
+        if kwargs.get('connect_socket', True):
+            self.connect_socket()
+        
+        t = threading.Thread(None, self.main)
+        t.daemon = daemon
+        t.start()
+
+    def connect_socket(self):
         self.recv_socket = self._context.socket(zmq.PULL)
         self.recv_socket.bind(self.id)
-        
-        if spawn:
-            t = threading.Thread(None, self.main)
-            t.daemon = daemon
-            t.start()
 
-    def send(self, to, data):
+    def send_message(self, to, message):
         if isinstance(to, Node):
             to = to.id
-        m = Message(sender=self.id, data=data)
         socket = self._context.socket(zmq.PUSH)
         socket.connect(to)
-        socket.send_pyobj(m)
-        
+        socket.send_pyobj(message)
 
+    def send(self, to, data):
+        m = Message(sender=self.id, data=data)
+        self.send_message(to, m)
+        
     def get_message(self):
         m= self.recv_socket.recv_pyobj()
         return m
@@ -80,6 +91,10 @@ class Node(object):
         #if m.name == 'Exit':
         #    print '%s exiting'%self.bind
         print m.__dict__
+
+    def exit(self):
+        m = ExitMessage(sender=self.id)
+        self.send_message(self, m)
 
     def receive(self, timeout=None):
         if timeout:
@@ -107,15 +122,14 @@ class Node(object):
                 self.f(m)
 
 class LocalNode(Node):
+    """Local Nodes allow you to connect to remote nodes with a different bind, or to get synchronous responses from Nodes."""
     def __init__(self, bind=None, daemon=True):
-        #spawn allows for local nodes to be created in the current thread
-        #f is a callable that will get sent message info
         Node._context = Node._context or zmq.Context()
-
         self.id = bind or 'inproc://homingbird-' + str(hash(self))
+        self.connect_socket()
 
-        self.recv_socket = self._context.socket(zmq.PULL)
-        self.recv_socket.bind(self.id)
+    def main(self):
+        return
 
 if __name__ == '__main__':
     def ping(m):
